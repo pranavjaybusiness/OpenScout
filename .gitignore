@@ -1,1 +1,20 @@
+# Secrets
 .env
+.env.local
+
+# Lambda deploy (build_lambda_zip.ps1 via Docker)
+backend/openscout-lambda.zip
+backend/package/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+

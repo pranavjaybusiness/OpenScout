@@ -1,19 +1,19 @@
-import logging
+from src.pipeline_log import ebay_search_query, ebay_search_response
 
-
+from src.services.ebay_affiliate import wrap_ebay_affiliate_url
 
 from src.services.ebay_client import EbayBrowseClient
 
-
-
-logger = logging.getLogger(__name__)
+from src.services.llm_service import verify_ebay_candidates
 
 
 
 _browse_client: EbayBrowseClient | None = None
 
+_NEW_CONDITION_IDS = {"1000"}
 
-
+# eBay Browse API allows up to 50 per request; all filtered candidates go to Gemini.
+_EBAY_SEARCH_LIMIT = 50
 
 
 def _get_browse_client() -> EbayBrowseClient:
@@ -32,15 +32,9 @@ def _get_browse_client() -> EbayBrowseClient:
 
 def build_ebay_queries(product_data: dict) -> list:
 
-    """
-
-    Generates a prioritized list of search queries using the Waterfall Strategy.
-
-    """
+    """Generates prioritized search queries using the waterfall strategy."""
 
     queries = []
-
-
 
     ids_list = product_data.get("identification_numbers") or []
 
@@ -64,8 +58,6 @@ def build_ebay_queries(product_data: dict) -> list:
 
     brand = product_data.get("brand") or ""
 
-
-
     gtin = ids.get("GTIN13") or ids.get("UPC") or ids.get("GTIN")
 
     if gtin:
@@ -82,6 +74,14 @@ def build_ebay_queries(product_data: dict) -> list:
 
 
 
+    cleaned_name = product_data.get("search_optimized_name")
+
+    if cleaned_name:
+
+        queries.append(cleaned_name)
+
+
+
     high_value_specs = []
 
     for spec in product_data.get("core_specifications", []):
@@ -90,21 +90,9 @@ def build_ebay_queries(product_data: dict) -> list:
 
             high_value_specs.append(spec.get("value"))
 
-
-
     if brand and high_value_specs:
 
-        spec_string = " ".join(high_value_specs)
-
-        queries.append(f"{brand} {spec_string}".strip())
-
-
-
-    cleaned_name = product_data.get("search_optimized_name")
-
-    if cleaned_name:
-
-        queries.append(cleaned_name)
+        queries.append(f"{brand} {' '.join(high_value_specs)}".strip())
 
 
 
@@ -120,76 +108,14 @@ def build_ebay_queries(product_data: dict) -> list:
 
             unique_queries.append(q)
 
-
-
     return unique_queries
 
 
 
 
 
-def _search_cheaper_listing(query: str, original_price: float) -> dict | None:
-
-    """
-
-    Call Browse search and return the first fixed-price item strictly cheaper than original_price.
-
-    Results are sorted by ascending price from eBay.
-
-    """
-
-    client = _get_browse_client()
-
-    if not client.is_configured():
-
-        return None
-
-
-
-    try:
-
-        items = client.search_items(query, limit=25)
-
-    except Exception as exc:
-
-        logger.warning("eBay search raised for query %r: %s", query[:80], exc)
-
-        return None
-
-
-
-    for item in items:
-
-        ebay_price = item["price"]
-
-        if ebay_price <= 0 or ebay_price >= original_price:
-
-            continue
-
-        savings = round(original_price - ebay_price, 2)
-
-        return {
-
-            "platform": "eBay",
-
-            "title": item["title"],
-
-            "price": f"${ebay_price:.2f}",
-
-            "url": item["itemWebUrl"],
-
-            "image_url": item.get("image_url") or "",
-
-            "savings": f"${savings:.2f}",
-
-        }
-
-
-
-    return None
-
-
-
+def _listing_price(listing: dict) -> float:
+    return float(str(listing.get("price") or "$0").replace("$", ""))
 
 
 def _numeric_price(product_data: dict) -> float | None:
@@ -204,43 +130,214 @@ def _numeric_price(product_data: dict) -> float | None:
 
         return None
 
-    if value <= 0.0:
-
-        return None
-
-    return value
+    return value if value > 0.0 else None
 
 
 
 
 
-def find_cheaper_alternative(product_data: dict) -> dict | None:
+def _listing_bucket(item: dict) -> str:
+    """Map API-filtered conditionId to new vs refurbished bucket for Gemini."""
+    condition_id = (item.get("condition_id") or "").strip()
+    if condition_id in _NEW_CONDITION_IDS:
+        return "new"
+    return "refurbished"
+
+
+
+
+
+def _as_listing(item: dict, original_price: float, condition_bucket: str) -> dict:
+
+    ebay_price = item["price"]
+
+    savings = round(original_price - ebay_price, 2)
+
+    label = "New" if condition_bucket == "new" else "Refurbished"
+
+    return {
+
+        "platform": "eBay",
+
+        "condition_type": condition_bucket,
+
+        "condition_label": label,
+
+        "title": item.get("title") or "",
+
+        "price": f"${ebay_price:.2f}",
+
+        "url": wrap_ebay_affiliate_url(item.get("itemWebUrl") or ""),
+
+        "image_url": item.get("image_url") or "",
+
+        "raw_condition": item.get("condition") or "",
+
+        "savings": f"${savings:.2f}",
+
+    }
+
+
+
+
+
+def _listing_from_bucket_verdict(
+    bucket_candidates: list[dict], bucket_verdict: dict
+) -> dict | None:
+    exact_index = bucket_verdict.get("exact_index")
+    close_index = bucket_verdict.get("close_index")
+    close_difference = (bucket_verdict.get("close_difference") or "").strip()
+
+    reason = (bucket_verdict.get("reason") or "").strip()[:2000]
+
+    if isinstance(exact_index, int) and 0 <= exact_index < len(bucket_candidates):
+        listing = dict(bucket_candidates[exact_index])
+        listing["match_quality"] = "exact"
+        if reason:
+            listing["gemini_match_reason"] = reason
+        return listing
+
+    if isinstance(close_index, int) and 0 <= close_index < len(bucket_candidates):
+        listing = dict(bucket_candidates[close_index])
+        listing["match_quality"] = "close"
+        listing["close_match_note"] = (
+            close_difference
+            or "Minor difference from what you're viewing (e.g. color or capacity)."
+        )
+        if reason:
+            listing["gemini_match_reason"] = reason
+        return listing
+
+    return None
+
+
+def find_cheaper_alternatives(product_data: dict) -> dict:
 
     original_price = _numeric_price(product_data)
 
     if original_price is None:
 
-        return None
+        return {"new": None, "refurbished": None}
+
+
+
+    client = _get_browse_client()
+
+    if not client.is_configured():
+
+        return {"new": None, "refurbished": None}
 
 
 
     queries = build_ebay_queries(product_data)
 
+    candidates: dict[str, list[dict]] = {"new": [], "refurbished": []}
 
+    seen_urls: set[str] = set()
 
     for query in queries:
 
-        listing = _search_cheaper_listing(query, original_price)
+        ebay_search_query(query)
 
-        if listing:
+        try:
 
-            logger.info("Found cheaper eBay listing via query %r", query[:80])
+            items = client.search_items(
+                query,
+                limit=_EBAY_SEARCH_LIMIT,
+                max_price=original_price,
+            )
 
-            return listing
+        except Exception:
+
+            ebay_search_response(query, [])
+
+            continue
+
+        ebay_search_response(query, items)
 
 
 
-    return None
+        for item in items:
+            ebay_price = item.get("price")
+            if not isinstance(ebay_price, (int, float)) or ebay_price <= 0:
+                continue
+            if ebay_price >= original_price:
+                continue
+
+            bucket = _listing_bucket(item)
+
+            listing = _as_listing(item, original_price, bucket)
+
+            url = listing.get("url") or ""
+
+            if not url or url in seen_urls:
+
+                continue
+
+            seen_urls.add(url)
+
+            candidates[bucket].append(listing)
+
+    for key in ("new", "refurbished"):
+        candidates[key] = sorted(
+            candidates[key],
+            key=_listing_price,
+            reverse=True,
+        )
+
+
+
+    if not candidates["new"] and not candidates["refurbished"]:
+
+        return {"new": None, "refurbished": None}
+
+
+
+    try:
+
+        verdict = verify_ebay_candidates(product_data, candidates)
+
+    except Exception:
+
+        verdict = {
+            "new": {
+                "exact_index": None,
+                "close_index": None,
+                "close_difference": None,
+                "reason": None,
+            },
+            "refurbished": {
+                "exact_index": None,
+                "close_index": None,
+                "close_difference": None,
+                "reason": None,
+            },
+        }
+
+    selected_new = _listing_from_bucket_verdict(candidates["new"], verdict.get("new") or {})
+    selected_refurbished = _listing_from_bucket_verdict(
+        candidates["refurbished"], verdict.get("refurbished") or {}
+    )
+
+    return {
+        "new": selected_new,
+        "refurbished": selected_refurbished,
+        "verification": verdict,
+    }
+
+
+
+
+
+def _primary_listing(options: dict) -> dict | None:
+
+    candidates = [x for x in (options.get("new"), options.get("refurbished")) if x]
+
+    if not candidates:
+
+        return None
+
+    return min(candidates, key=lambda x: float(x["price"].replace("$", "")))
 
 
 
@@ -248,19 +345,59 @@ def find_cheaper_alternative(product_data: dict) -> dict | None:
 
 def get_ebay_comparison(product_data: dict) -> dict:
 
-
     if _numeric_price(product_data) is None:
 
-        return {"searched": False, "found": False, "listing": None}
+        return {
+
+            "searched": False,
+
+            "found": False,
+
+            "listing": None,
+
+            "options": {"new": None, "refurbished": None},
+
+        }
 
 
 
-    listing = find_cheaper_alternative(product_data)
+    raw_options = find_cheaper_alternatives(product_data)
+    verification = raw_options.pop("verification", {})
+    options = raw_options
+
+    listing = _primary_listing(options)
+
+    has_exact = any(
+        opt and opt.get("match_quality") == "exact" for opt in options.values()
+    )
+
+    has_close = any(
+        opt and opt.get("match_quality") == "close" for opt in options.values()
+    )
+
+    match_summary = {
+        "has_exact_match": has_exact,
+        "has_close_match": has_close,
+    }
 
     if listing:
 
-        return {"searched": True, "found": True, "listing": listing}
+        return {
+            "searched": True,
+            "found": True,
+            "listing": listing,
+            "options": options,
+            "match_summary": match_summary,
+            "verification": verification,
+        }
 
-    return {"searched": True, "found": False, "listing": None}
+    return {
+        "searched": True,
+        "found": False,
+        "listing": None,
+        "options": {"new": None, "refurbished": None},
+        "match_summary": match_summary,
+        "verification": verification,
+    }
 
 

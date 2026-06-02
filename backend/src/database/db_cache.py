@@ -1,47 +1,88 @@
 import json
-import logging
 import time
 
 from botocore.exceptions import ClientError
 
 from src.database.db_core import dynamodb, clean_url
+from src.pipeline_log import dynamodb_error
 
-logger = logging.getLogger(__name__)
-
-cache_table = dynamodb.Table('OpenScoutCache')
+cache_table = dynamodb.Table("OpenScoutCache")
 TTL_SECONDS = 21600  # 6 hours
 
-def get_cached_product(url: str):
-    base_url = clean_url(url)
-    if not base_url: return None
 
-    try:
-        response = cache_table.get_item(Key={'product_url': base_url})
-        item = response.get('Item')
-        
-        if item and item['expires_at'] > int(time.time()):
-            logger.info("Cache hit for %s", base_url)
-            return json.loads(item['product_data'])
-        elif item:
-            logger.info("Cache expired for %s", base_url)
-
-    except ClientError as e:
-        logger.warning("DynamoDB cache read error: %s", e)
-        
+def _normalize_cached_payload(raw: dict) -> dict | None:
+    """Accept new {data, ebay} blobs and legacy product-only blobs."""
+    if not isinstance(raw, dict):
+        return None
+    if "data" in raw and "ebay" in raw:
+        return {"data": raw["data"], "ebay": raw["ebay"]}
+    # Legacy: entire blob was Gemini product extraction only.
+    if raw.get("name") is not None or raw.get("search_optimized_name") is not None:
+        return {"data": raw, "ebay": None}
     return None
 
-def save_to_cache(url: str, product_data: str):
+
+def get_cached_parse(url: str) -> dict | None:
+    """
+    Return cached parse result: {'data': product_dict, 'ebay': ebay_dict | None}.
+    ebay is None for legacy rows (product extraction only).
+    """
     base_url = clean_url(url)
-    if not base_url: return
-        
+    if not base_url:
+        return None
+
+    try:
+        response = cache_table.get_item(Key={"product_url": base_url})
+        item = response.get("Item")
+
+        if item and item["expires_at"] > int(time.time()):
+            raw = json.loads(item["product_data"])
+            return _normalize_cached_payload(raw)
+    except ClientError as e:
+        dynamodb_error(operation="cache_get", error=str(e))
+    except (json.JSONDecodeError, TypeError, KeyError):
+        pass
+
+    return None
+
+
+def save_parse_to_cache(url: str, data: dict, ebay: dict) -> None:
+    """Store full parse outcome (Gemini extraction + eBay comparison)."""
+    base_url = clean_url(url)
+    if not base_url:
+        return
+
+    payload = json.dumps({"data": data, "ebay": ebay}, ensure_ascii=False)
     try:
         cache_table.put_item(
             Item={
-                'product_url': base_url,
-                'product_data': product_data, 
-                'expires_at': int(time.time()) + TTL_SECONDS
+                "product_url": base_url,
+                "product_data": payload,
+                "expires_at": int(time.time()) + TTL_SECONDS,
             }
         )
-        logger.info("Wrote cache entry for %s", base_url)
     except ClientError as e:
-        logger.warning("DynamoDB cache write error: %s", e)
+        dynamodb_error(operation="cache_put", error=str(e))
+
+
+# Backwards-compatible aliases (tests / older imports)
+def get_cached_product(url: str):
+    cached = get_cached_parse(url)
+    return cached["data"] if cached else None
+
+
+def save_to_cache(url: str, product_data: str) -> None:
+    """Legacy: product_data JSON string only. Prefer save_parse_to_cache."""
+    base_url = clean_url(url)
+    if not base_url:
+        return
+    try:
+        cache_table.put_item(
+            Item={
+                "product_url": base_url,
+                "product_data": product_data,
+                "expires_at": int(time.time()) + TTL_SECONDS,
+            }
+        )
+    except ClientError as e:
+        dynamodb_error(operation="cache_put", error=str(e))

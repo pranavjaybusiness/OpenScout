@@ -5,3 +5,4 @@ google-genai
 python-dotenv
 boto3
 httpx
+mangum

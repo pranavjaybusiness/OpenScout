@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import logging
 import threading
 import time
 from typing import Any
@@ -14,12 +13,12 @@ from src.constants import (
     EBAY_CLIENT_ID,
     EBAY_CLIENT_SECRET,
     EBAY_MARKETPLACE_ID,
-    EBAY_USE_SANDBOX,
 )
 
-logger = logging.getLogger(__name__)
-
 _OAUTH_SCOPE = "https://api.ebay.com/oauth/api_scope"
+
+# Browse API conditionIds: New, Certified Refurbished, Seller Refurbished (no Used).
+_CONDITION_IDS_FILTER = "conditionIds:{1000|2000|2500}"
 
 
 def _parse_item_summary(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -56,6 +55,8 @@ def _parse_item_summary(item: dict[str, Any]) -> dict[str, Any] | None:
         "price": price_f,
         "itemWebUrl": url,
         "image_url": image_url,
+        "condition": (item.get("condition") or "").strip(),
+        "condition_id": str(item.get("conditionId") or "").strip(),
     }
 
 
@@ -63,10 +64,9 @@ class EbayBrowseClient:
     """Minimal client: token cache + item_summary search."""
 
     def __init__(self) -> None:
-        sandbox = str(EBAY_USE_SANDBOX).lower() in ("1", "true", "yes")
-        host = "api.sandbox.ebay.com" if sandbox else "api.ebay.com"
-        self._token_url = f"https://{host}/identity/v1/oauth2/token"
-        self._browse_base = f"https://{host}/buy/browse/v1"
+        # Production-only (no sandbox)
+        self._token_url = "https://api.ebay.com/identity/v1/oauth2/token"
+        self._browse_base = "https://api.ebay.com/buy/browse/v1"
         self._marketplace_id = (EBAY_MARKETPLACE_ID or "EBAY_US").strip()
         self._lock = threading.Lock()
         self._access_token: str | None = None
@@ -97,11 +97,6 @@ class EbayBrowseClient:
             )
 
         if not response.is_success:
-            logger.warning(
-                "eBay OAuth token request failed: %s %s",
-                response.status_code,
-                (response.text or "")[:400],
-            )
             response.raise_for_status()
 
         payload = response.json()
@@ -126,12 +121,21 @@ class EbayBrowseClient:
             self._access_token = None
             self._token_deadline_monotonic = 0.0
 
-    def search_items(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    def search_items(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        sort: str | None = "-price",
+        max_price: float | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Run item_summary search. Returns normalized dicts (title, price, itemWebUrl, image_url).
+
+        Uses sort=-price so eBay returns the highest-priced matches first (closest to the
+        retail page price). Optional max_price caps results below the page price dynamically.
         """
         if not self.is_configured():
-            logger.warning("eBay credentials missing; set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET")
             return []
 
         trimmed = (query or "").strip()
@@ -141,12 +145,20 @@ class EbayBrowseClient:
         base_params: list[tuple[str, str]] = [
             ("q", trimmed),
             ("limit", str(max(1, min(limit, 50)))),
-            ("sort", "price"),
         ]
-        fixed_price_filter: list[tuple[str, str]] = [
-            *base_params,
-            ("filter", "buyingOptions:{FIXED_PRICE}"),
+        if sort:
+            base_params.append(("sort", sort))
+
+        filters: list[str] = [
+            "buyingOptions:{FIXED_PRICE}",
+            _CONDITION_IDS_FILTER,
         ]
+        if max_price is not None and max_price > 0:
+            cap = max(1.0, float(max_price) - 0.01)
+            filters.append(f"price:[1..{cap:.2f}]")
+            filters.append("priceCurrency:USD")
+
+        filtered_params = [*base_params, ("filter", ",".join(filters))]
         url = f"{self._browse_base}/item_summary/search"
         headers = {
             "Authorization": f"Bearer {self.access_token()}",
@@ -154,16 +166,15 @@ class EbayBrowseClient:
         }
 
         with httpx.Client(timeout=25.0) as client:
-            response = client.get(url, headers=headers, params=fixed_price_filter)
+            response = client.get(url, headers=headers, params=filtered_params)
             if response.status_code == 400:
-                logger.info("eBay search retrying without FIXED_PRICE filter (first request was 400)")
                 response = client.get(url, headers=headers, params=base_params)
 
         if response.status_code == 401:
             self.invalidate_token()
             headers["Authorization"] = f"Bearer {self.access_token()}"
             with httpx.Client(timeout=25.0) as client:
-                response = client.get(url, headers=headers, params=fixed_price_filter)
+                response = client.get(url, headers=headers, params=filtered_params)
                 if response.status_code == 400:
                     response = client.get(url, headers=headers, params=base_params)
 
@@ -171,18 +182,11 @@ class EbayBrowseClient:
             return []
 
         if not response.is_success:
-            logger.warning(
-                "eBay search failed (%s) for query %r: %s",
-                response.status_code,
-                trimmed[:80],
-                (response.text or "")[:500],
-            )
             return []
 
         try:
             data = response.json()
         except ValueError:
-            logger.warning("eBay search returned non-JSON body")
             return []
 
         summaries = data.get("itemSummaries")
@@ -196,4 +200,6 @@ class EbayBrowseClient:
             parsed = _parse_item_summary(item)
             if parsed:
                 out.append(parsed)
+        # eBay sort=-price should already be high→low; keep stable ordering.
+        out.sort(key=lambda item: item["price"], reverse=True)
         return out

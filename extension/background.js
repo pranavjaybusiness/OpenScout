@@ -1,34 +1,24 @@
-class ApiHandler {
-    constructor(endpoint) {
-        this.endpoint = endpoint;
-    }
+importScripts("src/browser.js", "src/config.js", "src/api.js");
 
-    async sendToBackend(text) {
-        try {
-            const response = await fetch(this.endpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ raw_text: text })
-            });
-            return await response.json();
-        } catch (error) {
-            console.error("OpenScout Backend Error:", error);
-            return null;
-        }
-    }
-}
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.url || changeInfo.status === 'complete') {
-        chrome.tabs.sendMessage(tabId, { action: "page_navigated" }).catch(() => {});
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.url || changeInfo.status === "complete") {
+        browser.tabs.sendMessage(tabId, { action: "page_navigated" }).catch(() => {});
     }
 });
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === "process_text") {
-        const api = new ApiHandler("http://127.0.0.1:8000/parse");
-        
-        api.sendToBackend(request.payload).then(data => {
+
+browser.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    if (request.action === "submit_feedback") {
+        (async () => {
+            const data = await OpenScoutApi.submitFeedback(request.payload);
             sendResponse({ result: data });
-        });
-        return true; 
+        })();
+        return true;
+    }
+    if (request.action === "feedback_skipped") {
+        (async () => {
+            const data = await OpenScoutApi.feedbackSkipped(request.payload);
+            sendResponse({ result: data });
+        })();
+        return true;
     }
 });
