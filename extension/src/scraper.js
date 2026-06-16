@@ -3,7 +3,11 @@ class Scraper {
         let scrapedData = {
             metadata: {},
             json_ld: [],
-            identifiers: { url: window.location.href, potential_skus: {} },
+            identifiers: {
+                url: window.location.href,
+                hostname: window.location.hostname.replace(/^www\./i, ""),
+                potential_skus: {},
+            },
             images: [],
             visible_text_fallback: ""
         };

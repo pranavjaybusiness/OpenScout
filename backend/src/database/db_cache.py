@@ -11,21 +11,28 @@ TTL_SECONDS = 21600  # 6 hours
 
 
 def _normalize_cached_payload(raw: dict) -> dict | None:
-    """Accept new {data, ebay} blobs and legacy product-only blobs."""
+    """Accept {data, ebay, shopping} blobs and legacy product-only blobs."""
     if not isinstance(raw, dict):
         return None
     if "data" in raw and "ebay" in raw:
-        return {"data": raw["data"], "ebay": raw["ebay"]}
+        shopping = raw.get("shopping")
+        if shopping is None:
+            shopping = raw.get("shein")
+        return {
+            "data": raw["data"],
+            "ebay": raw["ebay"],
+            "shopping": shopping,
+            "alternatives": raw.get("alternatives"),
+        }
     # Legacy: entire blob was Gemini product extraction only.
     if raw.get("name") is not None or raw.get("search_optimized_name") is not None:
-        return {"data": raw, "ebay": None}
+        return {"data": raw, "ebay": None, "shopping": None, "alternatives": None}
     return None
 
 
 def get_cached_parse(url: str) -> dict | None:
     """
-    Return cached parse result: {'data': product_dict, 'ebay': ebay_dict | None}.
-    ebay is None for legacy rows (product extraction only).
+    Return cached parse result: {'data', 'ebay', 'shopping'} (may be None on legacy rows).
     """
     base_url = clean_url(url)
     if not base_url:
@@ -46,13 +53,22 @@ def get_cached_parse(url: str) -> dict | None:
     return None
 
 
-def save_parse_to_cache(url: str, data: dict, ebay: dict) -> None:
-    """Store full parse outcome (Gemini extraction + eBay comparison)."""
+def save_parse_to_cache(
+    url: str,
+    data: dict,
+    ebay: dict,
+    shopping: dict | None = None,
+    alternatives: list | None = None,
+) -> None:
+    """Store full parse outcome (Gemini extraction + marketplace comparisons)."""
     base_url = clean_url(url)
     if not base_url:
         return
 
-    payload = json.dumps({"data": data, "ebay": ebay}, ensure_ascii=False)
+    payload = json.dumps(
+        {"data": data, "ebay": ebay, "shopping": shopping, "alternatives": alternatives},
+        ensure_ascii=False,
+    )
     try:
         cache_table.put_item(
             Item={

@@ -18,7 +18,7 @@ function formatSavings(pagePrice, listingPrice) {
     if (pagePrice == null || listingPrice == null) return null;
     const savings = pagePrice - listingPrice;
     if (!Number.isFinite(savings) || savings <= 0) return null;
-    return `Save $${savings.toFixed(2)}`;
+    return `Saving $${savings.toFixed(2)}`;
 }
 
 function _isBedBathBeyondHost() {
@@ -32,9 +32,10 @@ function _isBedBathBeyondHost() {
 }
 
 class UIController {
-    constructor(onScoutClick, onDismiss) {
+    constructor(onScoutClick, onDismiss, onListingOpen) {
         this.onScoutClick = onScoutClick;
         this.onDismiss = onDismiss;
+        this.onListingOpen = onListingOpen;
         this.modal = null;
         this.scoutBtn = null;
         this.dismissBtn = null;
@@ -61,6 +62,8 @@ class UIController {
                 --os-muted: #6b7280;
                 --os-ebay: #0064d2;
                 --os-ebay-hover: #0052b3;
+                --os-shein: #111827;
+                --os-shein-hover: #374151;
                 --os-radius: 12px;
                 --os-shadow-modal: 0 8px 32px rgba(15, 23, 42, 0.12);
                 --os-shadow-card: 0 2px 14px rgba(15, 23, 42, 0.08);
@@ -127,96 +130,121 @@ class UIController {
             #openscout-modal #os-result {
                 display: flex;
                 flex-direction: column;
-                gap: 18px;
+                gap: 0;
+                scrollbar-width: thin;
+                scrollbar-color: #d1d5db transparent;
             }
-            #openscout-modal .os-ebay-card {
+            #openscout-modal #os-result::-webkit-scrollbar {
+                width: 6px;
+            }
+            #openscout-modal #os-result::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            #openscout-modal #os-result::-webkit-scrollbar-thumb {
+                background: #d1d5db;
+                border-radius: 999px;
+            }
+            #openscout-modal #os-result::-webkit-scrollbar-thumb:hover {
+                background: #9ca3af;
+            }
+            /* Section title */
+            #openscout-modal .os-section-title {
+                margin: 20px 2px 12px;
+                font-size: 18px;
+                font-weight: 700;
+                color: var(--os-text);
+                letter-spacing: -0.01em;
+            }
+            /* Cheaper option list */
+            #openscout-modal .os-list {
                 display: flex;
-                gap: 18px;
-                align-items: flex-start;
-                padding: 18px;
-                background: #fff;
-                border-radius: var(--os-radius);
-                box-shadow: var(--os-shadow-card);
+                flex-direction: column;
+                gap: 12px;
             }
-            #openscout-modal .os-ebay-card__media {
-                flex: 0 0 112px;
-                width: 112px;
-                height: 112px;
-                border-radius: 10px;
+            #openscout-modal .os-row-card {
+                background: #fff;
+                border-radius: 14px;
+                box-shadow: var(--os-shadow-card);
+                overflow: hidden;
+            }
+            #openscout-modal .os-row-card--close {
+                box-shadow: 0 2px 14px rgba(30, 64, 175, 0.12);
+            }
+            #openscout-modal a.os-row {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                padding: 18px 18px;
+                text-decoration: none;
+                color: inherit;
+            }
+            #openscout-modal a.os-row:hover {
+                background: #fafafa;
+            }
+            #openscout-modal .os-row__media {
+                flex: 0 0 88px;
+                width: 88px;
+                height: 88px;
+                border-radius: 12px;
                 overflow: hidden;
                 background: #f3f4f6;
             }
-            #openscout-modal .os-ebay-card__media img {
+            #openscout-modal .os-row__media img {
                 width: 100%;
                 height: 100%;
                 object-fit: cover;
                 display: block;
             }
-            #openscout-modal .os-ebay-card__body {
+            #openscout-modal .os-row__main {
                 flex: 1;
                 min-width: 0;
                 display: flex;
                 flex-direction: column;
-                gap: 10px;
+                gap: 3px;
             }
-            #openscout-modal .os-condition-badge {
-                align-self: flex-start;
-                font-size: 12px;
-                font-weight: 600;
-                letter-spacing: 0.02em;
-                text-transform: uppercase;
-                padding: 5px 11px;
-                border-radius: 999px;
-                background: #f3f4f6;
-                color: var(--os-text);
-            }
-            #openscout-modal .os-condition-badge--new {
-                background: #ecfdf5;
-                color: #047857;
-            }
-            #openscout-modal .os-condition-badge--refurbished {
-                background: #eff6ff;
-                color: #1d4ed8;
-            }
-            #openscout-modal .os-ebay-price {
-                font-size: 24px;
-                font-weight: 700;
-                color: var(--os-text);
-                line-height: 1.2;
-                letter-spacing: -0.02em;
-            }
-            #openscout-modal .os-ebay-savings {
+            #openscout-modal .os-row__title {
                 font-size: 15px;
                 font-weight: 600;
-                color: #047857;
+                color: var(--os-text);
                 line-height: 1.35;
-            }
-            #openscout-modal .os-ebay-title {
-                font-size: 15px;
-                font-weight: 500;
-                color: var(--os-muted);
-                line-height: 1.45;
                 display: -webkit-box;
                 -webkit-line-clamp: 2;
                 -webkit-box-orient: vertical;
                 overflow: hidden;
             }
-            #openscout-modal .os-ebay-cta {
-                align-self: flex-start;
-                margin-top: 4px;
-                padding: 10px 16px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: 600;
-                text-decoration: none;
-                color: #fff;
-                background: var(--os-ebay);
-                box-shadow: 0 1px 2px rgba(0, 100, 210, 0.25);
-                transition: background 0.15s ease;
+            #openscout-modal .os-row__seller {
+                font-size: 13px;
+                font-weight: 700;
+                color: var(--os-text);
             }
-            #openscout-modal .os-ebay-cta:hover {
-                background: var(--os-ebay-hover);
-                color: #fff;
+            #openscout-modal .os-row__right {
+                flex: 0 0 auto;
+                display: flex;
+                flex-direction: column;
+                align-items: flex-end;
+                gap: 2px;
+                text-align: right;
+            }
+            #openscout-modal .os-row__price {
+                font-size: 16px;
+                font-weight: 700;
+                color: var(--os-text);
+            }
+            #openscout-modal .os-row__less {
+                font-size: 13px;
+                font-weight: 600;
+                color: #047857;
+            }
+            #openscout-modal .os-pill-close {
+                align-self: flex-start;
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: 0.02em;
+                text-transform: uppercase;
+                padding: 3px 9px;
+                border-radius: 999px;
+                background: #eff6ff;
+                color: #1d4ed8;
             }
             #openscout-modal .os-status {
                 margin: 0;
@@ -267,27 +295,31 @@ class UIController {
                 line-height: 1.5;
             }
             #openscout-modal .os-feedback {
-                margin-top: 14px;
-                padding-top: 14px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 10px 16px 12px;
                 border-top: 1px solid #f3f4f6;
             }
             #openscout-modal .os-feedback__label {
-                font-size: 14px;
+                flex: 1;
+                font-size: 13px;
                 font-weight: 600;
-                color: var(--os-text);
-                margin-bottom: 10px;
+                color: var(--os-muted);
             }
             #openscout-modal .os-feedback__actions {
                 display: flex;
                 gap: 8px;
+                flex: 0 0 auto;
             }
             #openscout-modal .os-feedback__btn {
-                flex: 1;
-                padding: 10px 12px;
-                border-radius: 8px;
+                flex: 0 0 auto;
+                min-height: 0;
+                padding: 6px 16px;
+                border-radius: 999px;
                 border: 1px solid #e5e7eb;
                 background: #fff;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 600;
                 cursor: pointer;
                 transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
@@ -367,7 +399,7 @@ class UIController {
             top: "20px",
             right: "20px",
             zIndex: "999999",
-            width: "460px",
+            width: "560px",
             backgroundColor: "#ffffff",
             borderRadius: "14px",
             boxShadow: "0 8px 32px rgba(15, 23, 42, 0.12)",
@@ -383,14 +415,14 @@ class UIController {
 
         this.modal.innerHTML = `
             <div id="os-drag" style="touch-action: none; display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; cursor: grab; padding-bottom: 4px;">
-                <h3 style="margin: 0; color: #111827; font-size: 17px; font-weight: 700; pointer-events: none; letter-spacing: -0.01em;">OpenScout</h3>
-                <button id="os-close" type="button" aria-label="Close" style="background: none; border: none; cursor: pointer; font-size: 22px; color: #9ca3af; line-height: 1; padding: 4px;">✕</button>
+                <h3 style="margin: 0; color: #111827; font-size: 22px; font-weight: 700; pointer-events: none; letter-spacing: -0.02em;">OpenScout</h3>
+                <button id="os-close" type="button" aria-label="Close" style="display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; min-height: 36px; border-radius: 999px; background: #f3f4f6; border: none; cursor: pointer; font-size: 18px; color: #4b5563; line-height: 1; padding: 0;">✕</button>
             </div>
             <div id="os-actions">
                 <button id="os-scout" type="button" class="os-btn os-btn-primary">Scout Cheaper Products</button>
                 <button id="os-dismiss" type="button" class="os-btn os-btn-secondary">Dismiss</button>
             </div>
-            <div id="os-result" style="display: none; margin-top: 20px; max-height: 560px; overflow-y: auto;"></div>
+            <div id="os-result" style="display: none; flex-direction: column; margin-top: 20px; max-height: 640px; overflow-y: auto;"></div>
         `;
         document.body.appendChild(this.modal);
 
@@ -401,10 +433,40 @@ class UIController {
         this.attachListeners();
     }
 
-    _ebayComparisonShowsFeedback(product, ebay) {
-        if (!ebay?.searched) return false;
-        const { items } = this._cheaperListings(product, ebay);
-        return items.length > 0;
+    _buildAlternativeEntries(product, alternatives) {
+        const pagePrice =
+            parsePrice(product.numeric_price) ?? parsePrice(product.price);
+        const items = [];
+        if (!Array.isArray(alternatives) || pagePrice == null) {
+            return { items, showCloseMatchBanner: false };
+        }
+
+        for (const listing of alternatives) {
+            if (!listing || typeof listing !== "object") continue;
+            const listingPrice = parsePrice(listing.price);
+            if (listingPrice == null || listingPrice >= pagePrice) continue;
+            items.push({
+                listing,
+                matchQuality: listing.match_quality || "exact",
+                closeMatchNote: listing.close_match_note || "",
+                geminiMatchReason: listing.gemini_match_reason || "",
+                savingsLabel: formatSavings(pagePrice, listingPrice),
+                conditionKey: listing.condition_type || listing.condition_bucket || "new",
+            });
+        }
+
+        items.sort(
+            (a, b) =>
+                (parsePrice(a.listing.price) ?? Infinity) -
+                (parsePrice(b.listing.price) ?? Infinity)
+        );
+
+        const hasExact = items.some((entry) => entry.matchQuality === "exact");
+        const hasClose = items.some((entry) => entry.matchQuality === "close");
+        return {
+            items,
+            showCloseMatchBanner: hasClose && !hasExact,
+        };
     }
 
     _maybeRecordFeedbackSkipped() {
@@ -546,70 +608,13 @@ class UIController {
         this.scoutBtn.innerText = "Checking prices…";
         this.scoutBtn.disabled = true;
         this.dismissBtn.style.display = "none";
-        this.resultArea.style.display = "block";
+        this.resultArea.style.display = "flex";
         this.resultArea.replaceChildren();
         const loading = document.createElement("p");
         loading.className = "os-status os-loading";
         loading.textContent =
-            "Comparing prices on eBay… This usually takes 15–20 seconds.";
+            "Searching for cheaper options… This usually takes 15–30 seconds.";
         this.resultArea.appendChild(loading);
-    }
-
-    _cheaperListings(product, ebay) {
-        const pagePrice =
-            parsePrice(product.numeric_price) ?? parsePrice(product.price);
-
-        const options = ebay.options || {};
-        let newListing = options.new || null;
-        let refurbishedListing = options.refurbished || null;
-
-        if (!newListing && !refurbishedListing && ebay.listing) {
-            const bucket = ebay.listing.condition_type;
-            if (bucket === "new") newListing = ebay.listing;
-            else if (bucket === "refurbished") refurbishedListing = ebay.listing;
-        }
-
-        const items = [];
-        if (pagePrice == null) {
-            return { items, noCheaperNew: false };
-        }
-
-        const pushIfCheaper = (key, listing) => {
-            const listingPrice = parsePrice(listing.price);
-            if (listingPrice == null || listingPrice >= pagePrice) return;
-            items.push({
-                key,
-                listing,
-                matchQuality: listing.match_quality || "exact",
-                closeMatchNote: listing.close_match_note || "",
-                geminiMatchReason: listing.gemini_match_reason || "",
-                savingsLabel: formatSavings(pagePrice, listingPrice),
-            });
-        };
-
-        if (newListing) pushIfCheaper("new", newListing);
-        if (refurbishedListing) pushIfCheaper("refurbished", refurbishedListing);
-
-        const newEntry = items.find((entry) => entry.key === "new");
-        const refurbishedEntry = items.find((entry) => entry.key === "refurbished");
-        if (newEntry && refurbishedEntry) {
-            const newPrice = parsePrice(newEntry.listing.price);
-            const refurbishedPrice = parsePrice(refurbishedEntry.listing.price);
-            if (newPrice != null && refurbishedPrice != null && newPrice <= refurbishedPrice) {
-                const refurbishedIndex = items.indexOf(refurbishedEntry);
-                items.splice(refurbishedIndex, 1);
-            }
-        }
-
-        const hasNew = items.some((entry) => entry.key === "new");
-        const hasRefurbished = items.some((entry) => entry.key === "refurbished");
-        const hasExact = items.some((entry) => entry.matchQuality === "exact");
-        const hasClose = items.some((entry) => entry.matchQuality === "close");
-        return {
-            items,
-            noCheaperNew: hasRefurbished && !hasNew,
-            showCloseMatchBanner: hasClose && !hasExact,
-        };
     }
 
     _submitMatchFeedback(sameProduct, entry, product, feedbackRoot) {
@@ -690,137 +695,125 @@ class UIController {
     _renderListingCard(entry, product) {
         const listing = entry.listing || {};
         const isClose = entry.matchQuality === "close";
-        const card = document.createElement("article");
-        card.className = isClose ? "os-ebay-card os-ebay-card--close" : "os-ebay-card";
+        const platform = (listing.platform || "Store").trim();
+
+        const card = document.createElement("div");
+        card.className = isClose ? "os-row-card os-row-card--close" : "os-row-card";
+
+        const row = document.createElement("a");
+        row.className = "os-row";
+        row.href = listing.url || "#";
+        row.target = "_blank";
+        row.rel = "noopener noreferrer";
+        row.addEventListener("click", () => {
+            if (this.onListingOpen) this.onListingOpen(listing.url || "");
+        });
 
         if (listing.image_url) {
             const media = document.createElement("div");
-            media.className = "os-ebay-card__media";
+            media.className = "os-row__media";
             const img = document.createElement("img");
-            img.src = listing.image_url;
-            img.alt = listing.title || "eBay listing";
+            img.alt = listing.title || `${platform} listing`;
             img.referrerPolicy = "no-referrer";
+            img.decoding = "async";
+            img.width = 88;
+            img.height = 88;
+            img.src = listing.image_url;
             media.appendChild(img);
-            card.appendChild(media);
+            row.appendChild(media);
         }
 
-        const body = document.createElement("div");
-        body.className = "os-ebay-card__body";
-
-        const badgeRow = document.createElement("div");
-        badgeRow.style.display = "flex";
-        badgeRow.style.flexWrap = "wrap";
-        badgeRow.style.gap = "6px";
-        badgeRow.style.marginBottom = "2px";
+        const main = document.createElement("div");
+        main.className = "os-row__main";
 
         if (isClose) {
-            const closeBadge = document.createElement("span");
-            closeBadge.className = "os-condition-badge os-condition-badge--close";
-            closeBadge.textContent = "Close match";
-            badgeRow.appendChild(closeBadge);
+            const pill = document.createElement("span");
+            pill.className = "os-pill-close";
+            pill.textContent = "Close match";
+            main.appendChild(pill);
         }
 
-        const isNew = entry.key === "new";
-        const condBadge = document.createElement("span");
-        condBadge.className = `os-condition-badge ${isNew ? "os-condition-badge--new" : "os-condition-badge--refurbished"}`;
-        condBadge.textContent = isNew ? "Condition: New" : "Condition: Refurbished";
-        badgeRow.appendChild(condBadge);
-        body.appendChild(badgeRow);
+        const titleEl = document.createElement("div");
+        titleEl.className = "os-row__title";
+        titleEl.textContent = truncateTitle(listing.title, 70);
+        main.appendChild(titleEl);
+
+        const sellerEl = document.createElement("div");
+        sellerEl.className = "os-row__seller";
+        sellerEl.textContent = platform;
+        main.appendChild(sellerEl);
 
         if (isClose && entry.closeMatchNote) {
             const note = document.createElement("p");
             note.className = "os-close-match-note";
             note.textContent = entry.closeMatchNote;
-            body.appendChild(note);
+            main.appendChild(note);
         }
+
+        row.appendChild(main);
+
+        const right = document.createElement("div");
+        right.className = "os-row__right";
 
         const priceEl = document.createElement("div");
-        priceEl.className = "os-ebay-price";
+        priceEl.className = "os-row__price";
         priceEl.textContent = listing.price || "—";
-        body.appendChild(priceEl);
+        right.appendChild(priceEl);
 
         if (entry.savingsLabel) {
-            const savingsEl = document.createElement("div");
-            savingsEl.className = "os-ebay-savings";
-            savingsEl.textContent = entry.savingsLabel;
-            body.appendChild(savingsEl);
+            const lessEl = document.createElement("div");
+            lessEl.className = "os-row__less";
+            lessEl.textContent = entry.savingsLabel;
+            right.appendChild(lessEl);
         }
 
-        const titleEl = document.createElement("div");
-        titleEl.className = "os-ebay-title";
-        titleEl.textContent = truncateTitle(listing.title);
-        body.appendChild(titleEl);
+        row.appendChild(right);
+        card.appendChild(row);
 
-        const cta = document.createElement("a");
-        cta.className = "os-ebay-cta";
-        cta.href = listing.url || "#";
-        cta.target = "_blank";
-        cta.rel = "noopener noreferrer";
-        cta.textContent = "View on eBay";
-        body.appendChild(cta);
+        card.appendChild(this._renderFeedbackBlock(entry, product));
 
-        body.appendChild(this._renderFeedbackBlock(entry, product));
-
-        card.appendChild(body);
         return card;
     }
 
-    _renderEbayComparison(product, ebay) {
+    _renderAlternativesSection(product, alternatives, labels) {
         const fragment = document.createDocumentFragment();
 
-        if (!ebay.searched) {
-            const p = document.createElement("p");
-            p.className = "os-status";
-            p.textContent =
-                "We couldn't read a price on this page, so we didn't search eBay.";
-            fragment.appendChild(p);
-            return fragment;
-        }
+        const heading = document.createElement("h3");
+        heading.className = "os-section-title";
+        heading.textContent = labels.heading;
+        fragment.appendChild(heading);
 
-        const { items, noCheaperNew, showCloseMatchBanner } = this._cheaperListings(product, ebay);
+        const { items, showCloseMatchBanner } = this._buildAlternativeEntries(
+            product,
+            alternatives
+        );
 
         if (items.length > 0) {
-            if (showCloseMatchBanner) {
+            if (showCloseMatchBanner && labels.closeBanner) {
                 const banner = document.createElement("p");
                 banner.className = "os-close-match-banner";
-                banner.textContent =
-                    "No exact match on eBay for this item — here's the closest option we found. You may still want it if you're flexible on the difference noted below.";
+                banner.textContent = labels.closeBanner;
                 fragment.appendChild(banner);
             }
-            if (noCheaperNew) {
-                const notice = document.createElement("p");
-                notice.className = "os-no-new-notice";
-                notice.textContent =
-                    "No cheaper new listings on eBay — a refurbished option is available below.";
-                fragment.appendChild(notice);
-            }
+            const list = document.createElement("div");
+            list.className = "os-list";
             items.forEach((entry) => {
-                fragment.appendChild(this._renderListingCard(entry, product));
+                list.appendChild(this._renderListingCard(entry, product));
             });
-            return fragment;
-        }
-
-        if (!ebay.found) {
-            const p = document.createElement("p");
-            p.className = "os-status";
-            p.textContent = "No cheaper match found on eBay right now.";
-            fragment.appendChild(p);
+            fragment.appendChild(list);
             return fragment;
         }
 
         const p = document.createElement("p");
         p.className = "os-status";
-        p.textContent = "Nothing cheaper than this page's price on eBay.";
+        p.textContent = labels.notFound;
         fragment.appendChild(p);
         return fragment;
     }
 
     showResult(success, dataOrError) {
         const actions = document.getElementById("os-actions");
-        this.scoutBtn.style.display = "none";
-        if (actions) actions.style.display = "none";
-        this.resultArea.style.display = "flex";
-        this.resultArea.replaceChildren();
+        const content = document.createDocumentFragment();
 
         if (!success) {
             this.scoutBtn.style.display = "";
@@ -832,18 +825,41 @@ class UIController {
             const err = document.createElement("p");
             err.className = "os-error";
             err.textContent = USER_FACING_ERROR_COPY;
-            this.resultArea.appendChild(err);
+            content.appendChild(err);
+            this.resultArea.style.display = "flex";
+            this.resultArea.replaceChildren(content);
             return;
         }
 
         const payload = dataOrError;
         const product = payload.data || {};
-        const ebay = payload.ebay || {};
+        const alternatives = payload.alternatives || [];
         this.lastProduct = product;
         this.scanId = payload.scan_id ?? null;
         this.feedbackSubmitted = false;
-        this.feedbackPending = this._ebayComparisonShowsFeedback(product, ebay);
+        this.feedbackPending =
+            this._buildAlternativeEntries(product, alternatives).items.length > 0;
 
-        this.resultArea.appendChild(this._renderEbayComparison(product, ebay));
+        this.scoutBtn.style.display = "none";
+        if (actions) actions.style.display = "none";
+
+        const pagePrice =
+            parsePrice(product.numeric_price) ?? parsePrice(product.price);
+        const notFoundCopy =
+            pagePrice == null
+                ? "We couldn't read a price on this page, so we didn't search for deals."
+                : "No cheaper verified matches found right now.";
+
+        content.appendChild(
+            this._renderAlternativesSection(product, alternatives, {
+                heading: "Cheaper options",
+                closeBanner:
+                    "No exact matches — here are close options. Check the notes if you're flexible on small differences.",
+                notFound: notFoundCopy,
+            })
+        );
+
+        this.resultArea.style.display = "flex";
+        this.resultArea.replaceChildren(content);
     }
 }

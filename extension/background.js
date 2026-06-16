@@ -7,6 +7,13 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 browser.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    if (request.action === "parse_product") {
+        (async () => {
+            const data = await OpenScoutApi.parseProduct(request.rawText);
+            sendResponse({ result: data });
+        })();
+        return true;
+    }
     if (request.action === "submit_feedback") {
         (async () => {
             const data = await OpenScoutApi.submitFeedback(request.payload);

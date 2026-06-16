@@ -8,6 +8,9 @@ const OpenScoutApi = {
         if (!body || body.status !== "success") return false;
         if (body.data != null && typeof body.data === "object") return true;
         if (body.ebay != null && typeof body.ebay === "object") return true;
+        if (body.shopping != null && typeof body.shopping === "object") return true;
+        if (body.shein != null && typeof body.shein === "object") return true;
+        if (Array.isArray(body.alternatives) && body.alternatives.length > 0) return true;
         return false;
     },
 

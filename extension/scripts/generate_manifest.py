@@ -38,12 +38,11 @@ manifest = {
     "name": "OpenScout",
     "version": "1.4",
     "description": "Automated product parser and price comparator.",
-    "permissions": [],
+    "permissions": ["storage"],
     "host_permissions": patterns,
     "content_scripts": [
         {
             "matches": retail_matches,
-            "exclude_matches": ["*://*.ebay.com/*", "*://ebay.com/*"],
             "js": [
                 "src/browser.js",
                 "src/config.js",

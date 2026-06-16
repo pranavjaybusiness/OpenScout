@@ -17,8 +17,9 @@ from src.pipeline_log import (
     request_finished,
     request_started,
 )
-from src.services.llm_service import parse_product_text
-from src.services.ebay_service import get_ebay_comparison
+from src.services.comparison import get_marketplace_comparisons
+from src.services.marketplace.alternatives import build_alternatives
+from src.services.llm import parse_product_text
 from src.database.db_cache import get_cached_parse, save_parse_to_cache
 from src.database.db_history import log_analysis, save_user_feedback
 from src.observability.cloudwatch_metrics import (
@@ -39,6 +40,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def allow_private_network_for_local_dev(request: Request, call_next):
+    """
+    Chrome Private Network Access: retailer pages → 127.0.0.1 need this on preflight.
+    Older Starlette CORSMiddleware lacks allow_private_network; set header manually.
+    """
+    response = await call_next(request)
+    if request.headers.get("access-control-request-private-network") == "true":
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
 
 
 def _finish(request: Request, response, started_at: float, **extra):
@@ -152,12 +165,19 @@ async def parse_endpoint(body: ScrapeRequest):
         if cached:
             parsed_product_data = cached["data"]
             ebay = cached["ebay"]
-            legacy_upgrade = ebay is None
+            shopping = cached.get("shopping")
+            legacy_upgrade = ebay is None or shopping is None
             parse_cache_hit(product_url=product_url, legacy_upgrade=legacy_upgrade)
             if legacy_upgrade:
-                # Legacy cache row: product only — run eBay once and upgrade cache.
-                ebay = get_ebay_comparison(parsed_product_data)
-                save_parse_to_cache(product_url, parsed_product_data, ebay)
+                ebay_new, shopping_new = get_marketplace_comparisons(parsed_product_data)
+                if ebay is None:
+                    ebay = ebay_new
+                if shopping is None:
+                    shopping = shopping_new
+                alternatives = build_alternatives(ebay, shopping)
+                save_parse_to_cache(
+                    product_url, parsed_product_data, ebay, shopping, alternatives
+                )
             ebay_listing_url = ((ebay.get("listing") or {}).get("url") or "").strip()
             scan_id = log_analysis(
                 product_url,
@@ -165,10 +185,15 @@ async def parse_endpoint(body: ScrapeRequest):
                 ebay_listing_url=ebay_listing_url,
                 ebay=ebay,
             )
+            alternatives = cached.get("alternatives")
+            if alternatives is None:
+                alternatives = build_alternatives(ebay, shopping)
             return {
                 "status": "success",
                 "data": parsed_product_data,
                 "ebay": ebay,
+                "shopping": shopping,
+                "alternatives": alternatives,
                 "scan_id": scan_id,
             }
 
@@ -177,10 +202,13 @@ async def parse_endpoint(body: ScrapeRequest):
 
         parsed_product_data = json.loads(llm_response_string)
 
-        ebay = get_ebay_comparison(parsed_product_data)
+        ebay, shopping = get_marketplace_comparisons(parsed_product_data)
+        alternatives = build_alternatives(ebay, shopping)
         ebay_listing_url = ((ebay.get("listing") or {}).get("url") or "").strip()
 
-        save_parse_to_cache(product_url, parsed_product_data, ebay)
+        save_parse_to_cache(
+            product_url, parsed_product_data, ebay, shopping, alternatives
+        )
         scan_id = log_analysis(
             product_url,
             llm_response_string,
@@ -191,6 +219,8 @@ async def parse_endpoint(body: ScrapeRequest):
             "status": "success",
             "data": parsed_product_data,
             "ebay": ebay,
+            "shopping": shopping,
+            "alternatives": alternatives,
             "scan_id": scan_id,
         }
 

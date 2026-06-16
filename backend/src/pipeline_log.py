@@ -187,3 +187,28 @@ def gemini_verification_prompt(prompt: str) -> None:
 
 def gemini_verification_response(response: str) -> None:
     _log_step("gemini_verification_response", response)
+
+
+def shopping_search_query(query: str) -> None:
+    _log_step("shopping_search_query", query)
+
+
+def shopping_search_response(query: str, items: list[dict[str, Any]]) -> None:
+    _log_step(
+        "shopping_search_response",
+        {
+            "query": query,
+            "count": len(items),
+            "items": items,
+        },
+    )
+
+
+def shopping_link_unresolved(*, seller: str, product_token: str) -> None:
+    log_event(
+        "shopping_link_unresolved",
+        level="WARNING",
+        seller=seller,
+        product_token=product_token,
+    )
+
