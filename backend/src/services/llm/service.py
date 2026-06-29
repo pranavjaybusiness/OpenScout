@@ -5,7 +5,13 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from src.constants import GEMINI_API_KEY
+from src.constants import (
+    GEMINI_API_KEY,
+    GEMINI_EXTRACTION_MODEL,
+    GEMINI_EXTRACTION_THINKING_BUDGET,
+    GEMINI_VERIFICATION_MODEL,
+    GEMINI_VERIFICATION_THINKING_BUDGET,
+)
 from src.pipeline_log import (
     gemini_product_extraction,
     gemini_verification_prompt,
@@ -34,11 +40,25 @@ class ProductExtraction(BaseModel):
     price: str | None = Field(description="The formatted price for display, including currency symbol, e.g., '$649.99'")
     search_optimized_name: str | None = Field(
         description=(
-            "Clean, concise name optimized for searching this product on eBay and other "
-            "marketplaces. Remove promotional words; limit to ~7 core descriptive words. "
-            "Apply site_context rules from the system prompt: prefix with the store brand only "
-            "when the site is the product's own brand store and the page title lacks it; never "
-            "prefix multi-brand retailers (Amazon, Walmart, Target, etc.)."
+            "GENERIC model search query for eBay and other marketplaces. Identify the "
+            "brand + model/product line/generation only, and EXCLUDE cosmetic variant "
+            "attributes (color, finish, pattern, style/colorway). The goal is to match "
+            "ALL variants of the same model so cheaper colorways surface as alternatives. "
+            "Remove promotional words; limit to ~7 core descriptive words. Apply "
+            "site_context rules from the system prompt: prefix with the store brand only "
+            "when the site is the product's own brand store and the page title lacks it; "
+            "never prefix multi-brand retailers (Amazon, Walmart, Target, etc.). "
+            "Example: page is 'Sony WH-1000XM4 Wireless Headphones - White' -> "
+            "search_optimized_name = 'Sony WH-1000XM4 wireless headphones' (no color)."
+        )
+    )
+    variant: str | None = Field(
+        description=(
+            "The source product's COSMETIC variant only—color, finish, pattern, or "
+            "style/colorway (e.g. 'White')—that was removed from search_optimized_name. "
+            "Used during verification to label exact vs close matches. Do NOT put size, "
+            "capacity, volume, or dimensions here (those stay in search_optimized_name and "
+            "define a different product). Null if the product has no cosmetic variant."
         )
     )
     numeric_price: float | None = Field(description="The exact numeric price as a pure float for mathematical comparison. e.g., 649.99. No currency symbols or commas.")
@@ -59,15 +79,19 @@ class EbayBucketVerification(BaseModel):
     exact_indices: list[int] = Field(
         default_factory=list,
         description=(
-            "Every EXACT match index in this bucket. Include ALL qualifying exact matches, "
-            "not only the cheapest. Empty when none qualify."
+            "Every EXACT match index in this bucket (same model AND same variant as the "
+            "source, or variant not stated in the title). Include ALL qualifying exact "
+            "matches, not only the cheapest. Empty when none qualify."
         ),
     )
     close_matches: list[CloseMatchEntry] = Field(
         default_factory=list,
         description=(
-            "Close matches ONLY when exact_indices is empty. Include ALL qualifying close "
-            "matches with per-listing difference notes."
+            "Same-model listings that explicitly state a DIFFERENT minor variant than the "
+            "source (most often a different color). ALWAYS return these when they qualify, "
+            "WHETHER OR NOT exact matches also exist—cheaper colorways are shown as "
+            "alternatives. Include ALL qualifying close matches with per-listing difference "
+            "notes."
         ),
     )
     reason: str | None = Field(
@@ -97,30 +121,35 @@ _VERIFICATION_SYSTEM_INSTRUCTION = """You are a practical product-equivalence ve
 
 You will receive one source product and candidates grouped by marketplace. Evaluate each marketplace independently.
 
+The source product was searched by its GENERIC model (color/variant intentionally removed), so candidates will include BOTH the source's variant and other variants (e.g. other colors) of the same model. The source's own variant is provided in source_product.variant (usually a color). Your job: label each candidate as an exact match (same variant) or a close match (same model, different variant), so the shopper sees both the exact item and any cheaper alternate-color options.
+
 ## eBay (candidates.ebay)
 For each condition bucket (new, refurbished), return:
 - exact_indices: ALL EXACT match indices (every qualifying listing), or empty []
-- close_matches: ONLY when exact_indices is empty—every CLOSE match as {index, difference}, or empty []
+- close_matches: ALL same-model different-variant matches as {index, difference}, or empty []
 - reason: always required—a concise explanation for this bucket
 
 The shopper sees every approved listing sorted by price so they can choose their preferred store. Return every qualifying match, not just the cheapest.
 
-## Exact match
-- Same brand and same model/product line/generation as the source.
-- Same variant when the source specifies one (e.g. color): missing color on eBay counts as exact; listing must NOT clearly name a different color/variant than the source.
+## Exact match (exact_indices)
+- Same brand and same model/product line/generation as the source AND the same variant (source_product.variant, e.g. color).
+- A listing whose title does NOT state a color/variant counts as EXACT (eBay titles are often incomplete—do not demote to close just because the color is missing).
+- A listing that clearly names a DIFFERENT color/variant than source_product.variant is NOT exact (it is a close match instead).
 - Candidate indices are ordered from highest price to lowest (index 0 = most expensive still under the page price).
-- Include every candidate index that is an exact match. Never include a non-exact listing when exact matches exist in that bucket.
+- Include every candidate index that is an exact match.
 
-## Close match (strict—only when no exact match exists)
-- Use close_matches ONLY when exact_indices is empty for that bucket.
-- Allowed: same brand AND same model/generation with ONE minor explicit mismatch stated in the title (most often color, or storage/capacity when both sides name different sizes).
-- NOT allowed for close match: different brand, different model/generation (QC45 vs QuietComfort, XM4 vs XM5), accessories when source is main product, bundles, or vague "might be similar" guesses.
-- Include every qualifying close match with its own difference note.
+## Close match (close_matches) — returned ALONGSIDE exact matches
+- Return close matches WHETHER OR NOT exact_indices is non-empty. Do NOT suppress them when an exact match exists; cheaper alternate colors are valuable alternatives.
+- Allowed: same brand AND same model/generation with ONLY a COSMETIC variant mismatch stated in the title—a different color, finish, pattern, or style/colorway.
+- Each close match needs a short, user-facing difference note (e.g. "Color: listing is Black, your item is White").
+- A DIFFERENT size, capacity, volume, or dimensions is NOT a close match—it is a different product. REJECT it (do not put it in exact_indices or close_matches). Examples: 20qt vs 65qt cooler, 128GB vs 512GB, 13-inch vs 15-inch, size M vs size L.
+- Also NOT allowed for close match: different brand, different model/generation (QC45 vs QuietComfort, XM4 vs XM5), accessories when source is a main product, bundles, or vague "might be similar" guesses.
+- Do NOT list the same index in both exact_indices and close_matches.
 
 ## How to read eBay titles
 - Titles are often incomplete. Do NOT require year in the title when the product line name otherwise matches.
 - Missing color on eBay → treat as exact, not close.
-- Explicit different color in title vs source → exact_index null; may be close_index if same model.
+- Explicit different color in title vs source → not exact; add to close_matches if same model/generation.
 - Reject different generation when the title explicitly names it (QC45, WH-1000XM4, etc.).
 
 ## Accessories vs main products (important)
@@ -138,8 +167,8 @@ Return exact_indices and close_matches empty only when every candidate is clearl
 
 ## Shopping (candidates.shopping)
 Google Shopping candidates are new retail from various sellers (Walmart, Target, SHEIN, Amazon, brand sites, etc.)—not eBay (eBay is separate). Return under "shopping" using the same exact_indices / close_matches / reason fields as one eBay bucket:
-- exact_indices: ALL exact matches, or []
-- close_matches: only when exact_indices is empty
+- exact_indices: ALL exact matches (same model + same variant), or []
+- close_matches: ALL same-model different-variant matches, returned WHETHER OR NOT exact matches exist
 - reason: always required
 - Indices refer to shopping.candidates order (index 0 = most expensive still under the page price).
 - Each candidate includes a platform field (seller name)—use title + brand/model rules, not the seller name alone.
@@ -204,6 +233,7 @@ def _marketplace_verification_payload(
         "source_product": {
             "name": product_data.get("name"),
             "search_optimized_name": product_data.get("search_optimized_name"),
+            "variant": product_data.get("variant"),
             "brand": product_data.get("brand"),
             "price": product_data.get("price"),
             "numeric_price": product_data.get("numeric_price"),
@@ -252,6 +282,12 @@ def _empty_marketplace_verdict() -> dict:
 
 _PRODUCT_EXTRACTION_SYSTEM_INSTRUCTION = """You are a strict data extraction tool. Extract product details from the provided scraped page data and JSON-LD.
 
+## search_optimized_name (model query, color-generic only)
+Build search_optimized_name as the brand + model/product line/generation, and EXCLUDE ONLY cosmetic variant attributes—color, finish, pattern, and style/colorway. We search marketplaces with this query so that other COLORS of the same model are returned and can surface as cheaper alternatives. Put the source's color/finish in the separate "variant" field so it is still available for match verification.
+- ALWAYS KEEP size, capacity, volume, dimensions, and measurement specs in search_optimized_name (e.g. cooler quarts/liters, storage GB/TB, screen inches, clothing/shoe size, weight). These define a DIFFERENT product, not a variant—a 20qt cooler is not an alternative to a 65qt cooler. Do NOT move them to the "variant" field.
+- Example: "YETI Tundra 65 Cooler - Tan" -> search_optimized_name = "YETI Tundra 65 cooler", variant = "Tan" (keep "65", drop the color).
+- Example: "Sony WH-1000XM4 Wireless Headphones - White" -> search_optimized_name = "Sony WH-1000XM4 wireless headphones", variant = "White".
+
 ## Source site context
 The payload includes site_context (URL and hostname of the page). Use this when building search_optimized_name:
 
@@ -298,7 +334,7 @@ def _build_extraction_payload(text: str) -> str:
     return json.dumps(payload)[:50000]
 
 
-def parse_product_text(text: str, model: str = "gemini-2.5-flash") -> str:
+def parse_product_text(text: str, model: str = GEMINI_EXTRACTION_MODEL) -> str:
     response = client.models.generate_content(
         model=model,
         contents=_build_extraction_payload(text),
@@ -307,6 +343,9 @@ def parse_product_text(text: str, model: str = "gemini-2.5-flash") -> str:
             response_mime_type="application/json",
             response_schema=ProductExtraction,
             temperature=0.0,
+            thinking_config=types.ThinkingConfig(
+                thinking_budget=GEMINI_EXTRACTION_THINKING_BUDGET
+            ),
         ),
     )
     text = response.text or ""
@@ -328,23 +367,23 @@ def _parse_bucket_verdict(raw: dict, candidate_count: int) -> dict:
             exact_indices = [legacy]
 
     close_matches: list[dict] = []
-    if not exact_indices:
-        for entry in raw.get("close_matches") or []:
-            if not isinstance(entry, dict):
-                continue
-            index = entry.get("index")
-            if not isinstance(index, int) or not (0 <= index < candidate_count):
-                continue
-            if any(m["index"] == index for m in close_matches):
-                continue
-            difference = (entry.get("difference") or "").strip()
-            close_matches.append({"index": index, "difference": difference})
+    exact_set = set(exact_indices)
+    for entry in raw.get("close_matches") or []:
+        if not isinstance(entry, dict):
+            continue
+        index = entry.get("index")
+        if not isinstance(index, int) or not (0 <= index < candidate_count):
+            continue
+        if index in exact_set or any(m["index"] == index for m in close_matches):
+            continue
+        difference = (entry.get("difference") or "").strip()
+        close_matches.append({"index": index, "difference": difference})
 
-        if not close_matches:
-            close_index = raw.get("close_index")
-            close_difference = (raw.get("close_difference") or "").strip()
-            if isinstance(close_index, int) and 0 <= close_index < candidate_count:
-                close_matches = [{"index": close_index, "difference": close_difference}]
+    if not close_matches and not exact_indices:
+        close_index = raw.get("close_index")
+        close_difference = (raw.get("close_difference") or "").strip()
+        if isinstance(close_index, int) and 0 <= close_index < candidate_count:
+            close_matches = [{"index": close_index, "difference": close_difference}]
 
     reason = (raw.get("reason") or "").strip()[:2000] or None
 
@@ -359,7 +398,7 @@ def verify_marketplace_candidates(
     product_data: dict,
     ebay_candidates: dict[str, list[dict]],
     shopping_candidates: list[dict],
-    model: str = "gemini-2.5-flash",
+    model: str = GEMINI_VERIFICATION_MODEL,
 ) -> dict:
     """
     One Gemini call to verify eBay (new + refurbished) and Google Shopping candidates together.
@@ -386,6 +425,9 @@ def verify_marketplace_candidates(
                 response_mime_type="application/json",
                 response_schema=MarketplaceVerificationResult,
                 temperature=0.0,
+                thinking_config=types.ThinkingConfig(
+                    thinking_budget=GEMINI_VERIFICATION_THINKING_BUDGET
+                ),
             ),
         )
         text = response.text or ""

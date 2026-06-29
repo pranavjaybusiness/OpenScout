@@ -1,45 +1,78 @@
-"""Regenerate manifest.json from src/supported_domains.js (Chrome + Firefox MV3)."""
+"""Regenerate manifest.json from src/supported_domains.js (Chrome + Firefox MV3).
+
+By default this writes a minimal, store-ready manifest whose only host
+permission is the OpenScout API origin. Retailer sites do NOT need host
+permissions — the content script gets DOM access via content_scripts.matches —
+so listing them would only invite an in-depth AMO/Chrome review.
+
+Pass --dev to additionally include the localhost backend and broad AWS
+wildcards for local development.
+"""
+import argparse
 import json
 import re
 from pathlib import Path
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument(
+    "--dev",
+    action="store_true",
+    help="Include localhost + broad AWS wildcards (local development only).",
+)
+args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
 code = (ROOT / "src" / "supported_domains.js").read_text(encoding="utf-8")
 config_text = (ROOT / "src" / "config.js").read_text(encoding="utf-8")
 domains = sorted(set(re.findall(r'"([a-z0-9][a-z0-9.-]*\.[a-z]{2,})"', code)))
 
-patterns: list[str] = []
+# Retailer sites are scoped via content_scripts.matches, NOT host_permissions.
+retail_matches: list[str] = []
 for domain in domains:
-    patterns.append(f"*://*.{domain}/*")
-    patterns.append(f"*://{domain}/*")
+    retail_matches.append(f"*://*.{domain}/*")
+    retail_matches.append(f"*://{domain}/*")
+
+# host_permissions is reserved for origins we actually fetch() against. In
+# production that's just the OpenScout API endpoint.
+host_permissions: list[str] = []
 
 api_base_match = re.search(
-    r'^const OPENSCOUT_API_BASE\s*=\s*"(https?://[^"]+)"',
+    r'^\s*const OPENSCOUT_API_BASE\s*=\s*"(https?://[^"]+)"',
     config_text,
     re.MULTILINE,
 )
 if api_base_match:
     api_base = api_base_match.group(1).rstrip("/")
-    patterns.append(f"{api_base}/*")
-else:
-    patterns.append("http://127.0.0.1:8000/*")
-    patterns.append("https://*.execute-api.*.amazonaws.com/*")
+    host_permissions.append(f"{api_base}/*")
 
-retail_matches = [
-    p
-    for p in patterns
-    if "127.0.0.1" not in p
-    and "lambda-url" not in p
-    and "execute-api" not in p
-]
+if args.dev:
+    for dev_pattern in (
+        "http://127.0.0.1:8000/*",
+        "https://*.execute-api.*.amazonaws.com/*",
+        "https://*.lambda-url.*.on.aws/*",
+    ):
+        if dev_pattern not in host_permissions:
+            host_permissions.append(dev_pattern)
 
 manifest = {
     "manifest_version": 3,
     "name": "OpenScout",
-    "version": "1.4",
-    "description": "Automated product parser and price comparator.",
+    "version": "1.1",
+    "description": "A Open Source extension that helps users find the best deals while shopping",
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png",
+    },
+    "action": {
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "48": "icons/icon48.png",
+            "128": "icons/icon128.png",
+        }
+    },
     "permissions": ["storage"],
-    "host_permissions": patterns,
+    "host_permissions": host_permissions,
     "content_scripts": [
         {
             "matches": retail_matches,
@@ -66,4 +99,9 @@ manifest = {
 }
 
 (ROOT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-print(f"Wrote manifest.json — {len(domains)} domains, {len(retail_matches)} match patterns")
+print(
+    f"Wrote manifest.json — {len(domains)} domains, "
+    f"{len(retail_matches)} content-script matches, "
+    f"{len(host_permissions)} host permission(s)"
+    + (" [dev]" if args.dev else "")
+)

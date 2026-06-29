@@ -26,10 +26,19 @@ def _store_key(listing: dict) -> str:
     return host or "store"
 
 
+def _match_quality(listing: dict) -> str:
+    return (listing.get("match_quality") or "exact").strip().lower()
+
+
 def build_alternatives(ebay_result: dict, shopping_result: dict) -> list[dict]:
     """
-    Verified cheaper listings across eBay and Google Shopping, cheapest first,
-    keeping only the cheapest option per store.
+    Verified cheaper listings across eBay and Google Shopping, cheapest first.
+
+    Exact matches (same model + same variant) are always kept. Close matches
+    (same model, different variant—e.g. another color) are kept only when they are
+    cheaper than the cheapest exact match, since a close match that costs more than
+    the exact item adds no value. When there is no exact match at all, every close
+    match is kept. At most one exact and one close listing survive per store.
     """
     combined: list[dict] = []
     for listing in ebay_result.get("listings") or []:
@@ -41,16 +50,28 @@ def build_alternatives(ebay_result: dict, shopping_result: dict) -> list[dict]:
 
     combined.sort(key=_listing_price)
 
-    seen_stores: set[str] = set()
+    exact_prices = [
+        _listing_price(x) for x in combined if _match_quality(x) == "exact"
+    ]
+    cheapest_exact = min(exact_prices) if exact_prices else None
+
+    seen: set[tuple[str, str]] = set()
     unique: list[dict] = []
     for listing in combined:
         url = (listing.get("url") or "").strip()
         if not url:
             continue
-        store = _store_key(listing)
-        if store in seen_stores:
+        quality = _match_quality(listing)
+        if (
+            quality == "close"
+            and cheapest_exact is not None
+            and _listing_price(listing) >= cheapest_exact
+        ):
             continue
-        seen_stores.add(store)
+        key = (_store_key(listing), quality)
+        if key in seen:
+            continue
+        seen.add(key)
         unique.append(listing)
 
     return unique

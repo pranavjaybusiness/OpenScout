@@ -15,6 +15,22 @@ def _env(name: str, default: str = "") -> str:
 # Gemini
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(_env(name, str(default)))
+    except ValueError:
+        return default
+
+
+# Model + thinking-budget tuning (latency vs. accuracy). Gemini 2.5 Flash/Flash-Lite
+# enable "thinking" by default, which is the dominant request latency. thinking_budget=0
+# disables it; raise the verification budget if match quality regresses.
+GEMINI_EXTRACTION_MODEL = _env("GEMINI_EXTRACTION_MODEL", "gemini-2.5-flash-lite")
+GEMINI_VERIFICATION_MODEL = _env("GEMINI_VERIFICATION_MODEL", "gemini-2.5-flash")
+GEMINI_EXTRACTION_THINKING_BUDGET = _env_int("GEMINI_EXTRACTION_THINKING_BUDGET", 0)
+GEMINI_VERIFICATION_THINKING_BUDGET = _env_int("GEMINI_VERIFICATION_THINKING_BUDGET", 0)
+
 # CloudWatch custom metrics
 OPENSCOUT_METRIC_NAMESPACE = _env("OPENSCOUT_METRIC_NAMESPACE", "OpenScout")
 FEEDBACK_MATCH_YES_METRIC = "FeedbackMatchYes"
@@ -47,12 +63,11 @@ EBAY_AFFILIATE_MKCID = _env("EBAY_AFFILIATE_MKCID")
 EBAY_AFFILIATE_CUSTOMID = _env("EBAY_AFFILIATE_CUSTOMID")
 EBAY_AFFILIATE_SITEID = _env("EBAY_AFFILIATE_SITEID")
 
-# SearchAPI.io — Google Shopping
-SEARCHAPI_API_KEY = os.environ.get("SEARCHAPI_API_KEY")
+# SerpApi — Google Shopping (current provider)
+SERP_API_KEY = os.environ.get("SERP_API_KEY")
 GOOGLE_SHOPPING_GL = _env("GOOGLE_SHOPPING_GL", "us")
 GOOGLE_SHOPPING_HL = _env("GOOGLE_SHOPPING_HL", "en")
 GOOGLE_SHOPPING_LOCATION = _env("GOOGLE_SHOPPING_LOCATION", "United States")
-GOOGLE_SHOPPING_PRODUCT_ENGINE = _env("GOOGLE_SHOPPING_PRODUCT_ENGINE", "google_product")
 
 # SHEIN KOC affiliate (no SHEIN API call; applied to SHEIN URLs returned by Google Shopping)
 SHEIN_DOMAIN = _env("SHEIN_DOMAIN", "us.shein.com")

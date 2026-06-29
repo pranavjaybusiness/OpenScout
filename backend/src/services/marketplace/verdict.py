@@ -62,6 +62,9 @@ def listings_from_bucket_verdict(
         if isinstance(close_index, int) and 0 <= close_index < len(bucket_candidates):
             close_matches = [(close_index, close_difference)]
 
+    # An index marked exact takes precedence over the same index marked close.
+    exact_set = set(exact_indices)
+
     listings: list[dict] = []
 
     for index in exact_indices:
@@ -75,21 +78,25 @@ def listings_from_bucket_verdict(
             listing["gemini_match_reason"] = reason
         listings.append(listing)
 
-    if not exact_indices:
-        for index, difference in close_matches:
-            listing = dict(bucket_candidates[index])
-            listing["match_quality"] = "close"
-            listing["close_match_note"] = (
-                difference
-                or "Minor difference from what you're viewing (e.g. color or capacity)."
-            )
-            if source:
-                listing["source"] = source
-            if bucket:
-                listing["condition_bucket"] = bucket
-            if reason:
-                listing["gemini_match_reason"] = reason
-            listings.append(listing)
+    # Close matches surface ALONGSIDE exact matches (different-variant alternatives,
+    # e.g. another color). build_alternatives later drops close matches that are not
+    # cheaper than the best exact match.
+    for index, difference in close_matches:
+        if index in exact_set:
+            continue
+        listing = dict(bucket_candidates[index])
+        listing["match_quality"] = "close"
+        listing["close_match_note"] = (
+            difference
+            or "Different color/finish from what you're viewing."
+        )
+        if source:
+            listing["source"] = source
+        if bucket:
+            listing["condition_bucket"] = bucket
+        if reason:
+            listing["gemini_match_reason"] = reason
+        listings.append(listing)
 
     return listings
 

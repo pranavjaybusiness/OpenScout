@@ -246,6 +246,17 @@ class UIController {
                 background: #eff6ff;
                 color: #1d4ed8;
             }
+            #openscout-modal .os-pill-exact {
+                align-self: flex-start;
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: 0.02em;
+                text-transform: uppercase;
+                padding: 3px 9px;
+                border-radius: 999px;
+                background: #ecfdf5;
+                color: #047857;
+            }
             #openscout-modal .os-status {
                 margin: 0;
                 font-size: 15px;
@@ -463,6 +474,11 @@ class UIController {
 
         const hasExact = items.some((entry) => entry.matchQuality === "exact");
         const hasClose = items.some((entry) => entry.matchQuality === "close");
+        // Only badge exact rows when the list is mixed; otherwise the badge is noise.
+        const mixed = hasExact && hasClose;
+        for (const entry of items) {
+            entry.showExactPill = mixed && entry.matchQuality === "exact";
+        }
         return {
             items,
             showCloseMatchBanner: hasClose && !hasExact,
@@ -730,6 +746,11 @@ class UIController {
             const pill = document.createElement("span");
             pill.className = "os-pill-close";
             pill.textContent = "Close match";
+            main.appendChild(pill);
+        } else if (entry.showExactPill) {
+            const pill = document.createElement("span");
+            pill.className = "os-pill-exact";
+            pill.textContent = "Exact match";
             main.appendChild(pill);
         }
 

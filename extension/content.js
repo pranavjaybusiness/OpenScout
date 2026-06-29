@@ -19,6 +19,9 @@ class OpenScoutApp {
         this._syncTimer = null;
         this._parseInFlight = false;
         this._parseHref = null;
+        // Prefetched parse so the result is already in flight (or done) by the time
+        // the user clicks Scout. Shape: { href, promise }.
+        this._prefetch = null;
     }
 
     // Remember the store a clicked cheaper-option points to, so its product page
@@ -84,6 +87,7 @@ class OpenScoutApp {
         if (hrefChanged) {
             this._href = href;
             this._dismissed = false;
+            this._prefetch = null;
             this.teardown();
         }
 
@@ -105,6 +109,10 @@ class OpenScoutApp {
         if (this._dismissed) {
             return;
         }
+
+        // Start parsing as soon as we know this is a product page, so the result is
+        // already in flight (or cached) by the time the user clicks Scout.
+        this.startPrefetch();
 
         // Modal already on screen for this URL — skip re-inject (was causing 3–4 flickers).
         if (this.ui && document.getElementById("openscout-modal")) {
@@ -163,26 +171,54 @@ class OpenScoutApp {
         this.syncPage();
     }
 
+    // Scrape the page and send one parse request to the backend.
+    _requestParse() {
+        const rawText = Scraper.extractData();
+        return new Promise((resolve, reject) => {
+            browser.runtime.sendMessage(
+                { action: "parse_product", rawText },
+                (response) => {
+                    if (browser.runtime.lastError) {
+                        reject(new Error(browser.runtime.lastError.message));
+                        return;
+                    }
+                    resolve(response?.result);
+                }
+            );
+        });
+    }
+
+    // Begin parsing in the background for the current product page (once per URL).
+    startPrefetch() {
+        const href = window.location.href;
+        if (this._prefetch && this._prefetch.href === href) return;
+        const promise = this._requestParse();
+        // Swallow errors here so an unclicked prefetch never logs an unhandled
+        // rejection; handleScoutClick re-awaits and handles failures itself.
+        promise.catch(() => {});
+        this._prefetch = { href, promise };
+    }
+
     async handleScoutClick() {
         if (this._parseInFlight || !this.ui) return;
 
         const ui = this.ui;
         this._parseInFlight = true;
-        this._parseHref = window.location.href;
+        const href = window.location.href;
+        this._parseHref = href;
 
         try {
-            const body = await new Promise((resolve, reject) => {
-                browser.runtime.sendMessage(
-                    { action: "parse_product", rawText: Scraper.extractData() },
-                    (response) => {
-                        if (browser.runtime.lastError) {
-                            reject(new Error(browser.runtime.lastError.message));
-                            return;
-                        }
-                        resolve(response?.result);
-                    }
-                );
-            });
+            let body;
+            if (this._prefetch && this._prefetch.href === href) {
+                try {
+                    body = await this._prefetch.promise;
+                } catch {
+                    // Prefetch failed — fall back to a fresh request.
+                    body = await this._requestParse();
+                }
+            } else {
+                body = await this._requestParse();
+            }
             if (!this.ui || this.ui !== ui) return;
             if (OpenScoutApi.isParseSuccess(body)) {
                 ui.showResult(true, body);
